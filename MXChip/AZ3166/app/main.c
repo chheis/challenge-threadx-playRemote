@@ -15,6 +15,7 @@
 
 #include <stdio.h>
 #include <math.h>
+#include <string.h>
 
 #include "tx_api.h"
 #include "nx_api.h"
@@ -49,7 +50,7 @@ void ScreenShowText(char* text);
 /* MQTT Demo defines */
 
 /* IP Address of the local server. */
-#define  LOCAL_SERVER_ADDRESS (IP_ADDRESS(192, 168, 0, 118))
+#define  LOCAL_SERVER_ADDRESS (IP_ADDRESS(192, 168, 88, 100))
 
 #define  DEMO_STACK_SIZE            2048
 #define  CLIENT_ID_STRING           "mytestclient"
@@ -62,6 +63,7 @@ static NXD_MQTT_CLIENT              mqtt_client;
 /* Define the symbol for signaling a received message. */
 /* Define the test threads.  */
 #define TOPIC_NAME                  "mqtt_data"
+#define SUBSCRIBE_TOPIC             "InVehicleTopics"
 #define MESSAGE_STRING              "This is a message. "
 /* Define the priority of the MQTT internal thread. */
 #define MQTT_THREAD_PRIORITY 2
@@ -69,13 +71,16 @@ static NXD_MQTT_CLIENT              mqtt_client;
 #define MQTT_KEEP_ALIVE_TIMER       300
 #define QOS0                        0
 #define QOS1                        1
+#define MQTT_TOPIC_BUFFER_SIZE      64
+#define MQTT_MESSAGE_BUFFER_SIZE    512
+#define INDICATOR_BLINK_TICKS       (TX_TIMER_TICKS_PER_SECOND / 3)
 /* Declare event flag, which is used in this demo. */
 TX_EVENT_FLAGS_GROUP                mqtt_app_flag;
 #define DEMO_MESSAGE_EVENT          1
 #define DEMO_ALL_EVENTS             3
 /* Declare buffers to hold message and topic. */
-static UCHAR message_buffer[NXD_MQTT_MAX_MESSAGE_LENGTH];
-static UCHAR topic_buffer[NXD_MQTT_MAX_TOPIC_NAME_LENGTH];
+static UCHAR message_buffer[MQTT_MESSAGE_BUFFER_SIZE];
+static UCHAR topic_buffer[MQTT_TOPIC_BUFFER_SIZE];
 /* Declare the disconnect notify function. */
 static VOID my_disconnect_func(NXD_MQTT_CLIENT *client_ptr)
 {
@@ -85,19 +90,237 @@ static VOID my_disconnect_func(NXD_MQTT_CLIENT *client_ptr)
 
 static VOID my_notify_func(NXD_MQTT_CLIENT* client_ptr, UINT number_of_messages)
 {
+    UINT flag_status;
+
     NX_PARAMETER_NOT_USED(client_ptr);
-    NX_PARAMETER_NOT_USED(number_of_messages);
-    tx_event_flags_set(&mqtt_app_flag, DEMO_MESSAGE_EVENT, TX_OR);
+    flag_status = tx_event_flags_set(&mqtt_app_flag, DEMO_MESSAGE_EVENT, TX_OR);
+    printf("[MQTT][NOTIFY] messages=%u tx_event_flags_set=0x%08x\r\n",
+           number_of_messages, flag_status);
     return;
 }
 
-static ULONG    error_counter;
+static UINT     left_signal_on;
+static UINT     right_signal_on;
+static UINT     brake_active;
+static UINT     indicator_blink_state = 1;
+static ULONG    indicator_last_toggle_ticks;
+
+static UINT read_boolean_value(const CHAR* message, const CHAR* key, UINT* value)
+{
+    const CHAR* key_ptr;
+    const CHAR* value_ptr;
+    CHAR lhs;
+    CHAR rhs;
+    UINT i;
+
+    static const CHAR token_true[] = "true";
+    static const CHAR token_true_quoted[] = "\"true\"";
+    static const CHAR token_active[] = "active";
+    static const CHAR token_active_quoted[] = "\"active\"";
+    static const CHAR token_false[] = "false";
+    static const CHAR token_false_quoted[] = "\"false\"";
+    static const CHAR token_inactive[] = "inactive";
+    static const CHAR token_inactive_quoted[] = "\"inactive\"";
+
+    if ((message == NX_NULL) || (key == NX_NULL) || (value == NX_NULL))
+    {
+        return NX_NOT_SUCCESSFUL;
+    }
+
+    key_ptr = strstr(message, key);
+    if (key_ptr == NX_NULL)
+    {
+        return NX_NOT_SUCCESSFUL;
+    }
+
+    value_ptr = strchr(key_ptr, ':');
+    if (value_ptr == NX_NULL)
+    {
+        return NX_NOT_SUCCESSFUL;
+    }
+    value_ptr++;
+
+    while ((*value_ptr == ' ') || (*value_ptr == '\t') || (*value_ptr == '\r') || (*value_ptr == '\n'))
+    {
+        value_ptr++;
+    }
+
+    /* Case-insensitive token matching to accept ACTIVE/INACTIVE/TRUE/FALSE variants. */
+    i = 0;
+    while ((token_true[i] != 0) && (value_ptr[i] != 0))
+    {
+        lhs = value_ptr[i];
+        rhs = token_true[i];
+        if ((lhs >= 'A') && (lhs <= 'Z')) { lhs = (CHAR)(lhs + ('a' - 'A')); }
+        if (lhs != rhs) { break; }
+        i++;
+    }
+    if ((token_true[i] == 0) || (strncmp(value_ptr, "1", 1) == 0))
+    {
+        *value = 1;
+        return NX_SUCCESS;
+    }
+
+    i = 0;
+    while ((token_true_quoted[i] != 0) && (value_ptr[i] != 0))
+    {
+        lhs = value_ptr[i];
+        rhs = token_true_quoted[i];
+        if ((lhs >= 'A') && (lhs <= 'Z')) { lhs = (CHAR)(lhs + ('a' - 'A')); }
+        if ((rhs >= 'A') && (rhs <= 'Z')) { rhs = (CHAR)(rhs + ('a' - 'A')); }
+        if (lhs != rhs) { break; }
+        i++;
+    }
+    if (token_true_quoted[i] == 0)
+    {
+        *value = 1;
+        return NX_SUCCESS;
+    }
+
+    i = 0;
+    while ((token_active[i] != 0) && (value_ptr[i] != 0))
+    {
+        lhs = value_ptr[i];
+        rhs = token_active[i];
+        if ((lhs >= 'A') && (lhs <= 'Z')) { lhs = (CHAR)(lhs + ('a' - 'A')); }
+        if (lhs != rhs) { break; }
+        i++;
+    }
+    if (token_active[i] == 0)
+    {
+        *value = 1;
+        return NX_SUCCESS;
+    }
+
+    i = 0;
+    while ((token_active_quoted[i] != 0) && (value_ptr[i] != 0))
+    {
+        lhs = value_ptr[i];
+        rhs = token_active_quoted[i];
+        if ((lhs >= 'A') && (lhs <= 'Z')) { lhs = (CHAR)(lhs + ('a' - 'A')); }
+        if ((rhs >= 'A') && (rhs <= 'Z')) { rhs = (CHAR)(rhs + ('a' - 'A')); }
+        if (lhs != rhs) { break; }
+        i++;
+    }
+    if (token_active_quoted[i] == 0)
+    {
+        *value = 1;
+        return NX_SUCCESS;
+    }
+
+    i = 0;
+    while ((token_false[i] != 0) && (value_ptr[i] != 0))
+    {
+        lhs = value_ptr[i];
+        rhs = token_false[i];
+        if ((lhs >= 'A') && (lhs <= 'Z')) { lhs = (CHAR)(lhs + ('a' - 'A')); }
+        if (lhs != rhs) { break; }
+        i++;
+    }
+    if ((token_false[i] == 0) || (strncmp(value_ptr, "0", 1) == 0))
+    {
+        *value = 0;
+        return NX_SUCCESS;
+    }
+
+    i = 0;
+    while ((token_false_quoted[i] != 0) && (value_ptr[i] != 0))
+    {
+        lhs = value_ptr[i];
+        rhs = token_false_quoted[i];
+        if ((lhs >= 'A') && (lhs <= 'Z')) { lhs = (CHAR)(lhs + ('a' - 'A')); }
+        if ((rhs >= 'A') && (rhs <= 'Z')) { rhs = (CHAR)(rhs + ('a' - 'A')); }
+        if (lhs != rhs) { break; }
+        i++;
+    }
+    if (token_false_quoted[i] == 0)
+    {
+        *value = 0;
+        return NX_SUCCESS;
+    }
+
+    i = 0;
+    while ((token_inactive[i] != 0) && (value_ptr[i] != 0))
+    {
+        lhs = value_ptr[i];
+        rhs = token_inactive[i];
+        if ((lhs >= 'A') && (lhs <= 'Z')) { lhs = (CHAR)(lhs + ('a' - 'A')); }
+        if (lhs != rhs) { break; }
+        i++;
+    }
+    if (token_inactive[i] == 0)
+    {
+        *value = 0;
+        return NX_SUCCESS;
+    }
+
+    i = 0;
+    while ((token_inactive_quoted[i] != 0) && (value_ptr[i] != 0))
+    {
+        lhs = value_ptr[i];
+        rhs = token_inactive_quoted[i];
+        if ((lhs >= 'A') && (lhs <= 'Z')) { lhs = (CHAR)(lhs + ('a' - 'A')); }
+        if ((rhs >= 'A') && (rhs <= 'Z')) { rhs = (CHAR)(rhs + ('a' - 'A')); }
+        if (lhs != rhs) { break; }
+        i++;
+    }
+    if (token_inactive_quoted[i] == 0)
+    {
+        *value = 0;
+        return NX_SUCCESS;
+    }
+
+    return NX_NOT_SUCCESSFUL;
+}
+
+static VOID apply_led_state(UINT left, UINT right, UINT brake)
+{
+    ULONG now_ticks = tx_time_get();
+
+    if ((ULONG)(now_ticks - indicator_last_toggle_ticks) >= INDICATOR_BLINK_TICKS)
+    {
+        indicator_last_toggle_ticks = now_ticks;
+        indicator_blink_state = (UINT)!indicator_blink_state;
+    }
+
+    if (left && indicator_blink_state)
+    {
+        CLOUD_LED_ON();
+    }
+    else
+    {
+        CLOUD_LED_OFF();
+    }
+
+    if (right && indicator_blink_state)
+    {
+        WIFI_LED_ON();
+    }
+    else
+    {
+        WIFI_LED_OFF();
+    }
+
+    if (brake)
+    {
+        USER_LED_ON();
+    }
+    else
+    {
+        USER_LED_OFF();
+    }
+}
 
 static void eclipsetx_thread_entry(ULONG parameter)
 {
     UINT status;
+    UINT receive_status;
+    UINT left_status;
+    UINT right_status;
+    UINT brake_status;
 
     printf("Starting Eclipse ThreadX thread\r\n\r\n");
+    NX_PARAMETER_NOT_USED(parameter);
 
     // Initialize the network
     if ((status = wwd_network_init(WIFI_SSID, WIFI_PASSWORD, WIFI_MODE)))
@@ -123,6 +346,7 @@ static void eclipsetx_thread_entry(ULONG parameter)
         CLIENT_ID_STRING, STRLEN(CLIENT_ID_STRING), &nx_ip, &nx_pool[0],
         (VOID*)mqtt_client_stack, sizeof(mqtt_client_stack),
         MQTT_THREAD_PRIORITY, NX_NULL, 0);
+    printf("[MQTT][INIT] nxd_mqtt_client_create status=0x%08x\r\n", status);
 
     //status = nxd_mqtt_client_create(&mqtt_client, "my_client", CLIENT_ID_STRING, STRLEN(CLIENT_ID_STRING),
     //                                /*ip_ptr, pool_ptr*/&nx_ip, &nx_pool[2], (VOID*)mqtt_client_stack, sizeof(mqtt_client_stack), 
@@ -135,14 +359,27 @@ static void eclipsetx_thread_entry(ULONG parameter)
     nxd_mqtt_client_disconnect_notify_set(&mqtt_client, my_disconnect_func);
 
     status = tx_event_flags_create(&mqtt_app_flag, "my app event");
+    printf("[MQTT][INIT] tx_event_flags_create status=0x%08x\r\n", status);
     server_ip.nxd_ip_version = 4;
     server_ip.nxd_ip_address.v4 = LOCAL_SERVER_ADDRESS;
+    printf("[MQTT][INIT] broker=%lu.%lu.%lu.%lu:%u\r\n",
+           (ULONG)((LOCAL_SERVER_ADDRESS >> 24) & 0xFF),
+           (ULONG)((LOCAL_SERVER_ADDRESS >> 16) & 0xFF),
+           (ULONG)((LOCAL_SERVER_ADDRESS >> 8) & 0xFF),
+           (ULONG)(LOCAL_SERVER_ADDRESS & 0xFF),
+           (UINT)NXD_MQTT_PORT);
+    printf("[MQTT][INIT] buffers topic=%u message=%u\r\n",
+           (UINT)sizeof(topic_buffer), (UINT)sizeof(message_buffer));
 
     /* Start the connection to the server. */
     status = nxd_mqtt_client_connect(&mqtt_client, &server_ip, NXD_MQTT_PORT, MQTT_KEEP_ALIVE_TIMER, 0, NX_WAIT_FOREVER);
 
     if (status != TX_SUCCESS) {
         printf("nxd_mqtt_client_connect (0x%08x)\r\n", status);
+    }
+    else
+    {
+        printf("[MQTT][INIT] connected\r\n");
     }
 
     // if (status)
@@ -160,7 +397,6 @@ static void eclipsetx_thread_entry(ULONG parameter)
     if (status)
     {
         printf("Error in setting MQTT over WebSocket: 0x%02x\r\n", status);
-        error_counter++;
     }
 #endif /* NXD_MQTT_OVER_WEBSOCKET */
 
@@ -197,68 +433,157 @@ static void eclipsetx_thread_entry(ULONG parameter)
     // ScreenShowValue(error_counter);
 
     lsm6dsl_data_t lsm6dsl_data;
+    CHAR screen_value_str[96];
+    CHAR signal_state_str[21];
+    CHAR* left_section;
+    CHAR* right_section;
+    CHAR* brake_section;
 
-    lsm6dsl_data = lsm6dsl_data_read();
-    char screen_value_str[21];
-        //sprintf(screen_value_str, "%6d", absolute_acceleration);
+    /* Subscribe and register receive callback before entering the publish loop. */
+    status = nxd_mqtt_client_subscribe(&mqtt_client, SUBSCRIBE_TOPIC, STRLEN(SUBSCRIBE_TOPIC), QOS0);
+    if (status != NX_SUCCESS)
+    {
+        printf("nxd_mqtt_client_subscribe failed (0x%08x)\r\n", status);
+    }
+    else
+    {
+        printf("[MQTT][SUB] subscribed topic=%s qos=%u\r\n", SUBSCRIBE_TOPIC, QOS0);
+    }
 
-    sprintf(screen_value_str, "%4d; %4d; %4d ", (int)lsm6dsl_data.acceleration_mg[0], (int)lsm6dsl_data.acceleration_mg[1], (int)lsm6dsl_data.acceleration_mg[2]);
+    status = nxd_mqtt_client_receive_notify_set(&mqtt_client, my_notify_func);
+    if (status != NX_SUCCESS)
+    {
+        printf("nxd_mqtt_client_receive_notify_set failed (0x%08x)\r\n", status);
+    }
+    else
+    {
+        printf("[MQTT][SUB] receive notify registered\r\n");
+    }
 
-    nxd_mqtt_client_publish(&mqtt_client, TOPIC_NAME,
-        STRLEN(TOPIC_NAME), (CHAR*)screen_value_str, 
-        STRLEN(MESSAGE_STRING), 0, QOS1, NX_WAIT_FOREVER);
-    printf("Publish a message with QoS level 1: %s\n", screen_value_str);
     printf("Go for Loop forever\r\n");
-    while(1){
-        //ScreenShowSensValue();
-        //printf("Loop forever\r\n");
-        lsm6dsl_data = lsm6dsl_data_read();
-        //sprintf(screen_value_str, "%6d", absolute_acceleration);
+    while (1)
+    {
+        INT gyro_x;
+        INT gyro_y;
+        INT gyro_z;
 
-        sprintf(screen_value_str, "%4d; %4d; %4d ", (int)lsm6dsl_data.acceleration_mg[0], (int)lsm6dsl_data.acceleration_mg[1], (int)lsm6dsl_data.acceleration_mg[2]);
+        lsm6dsl_data = lsm6dsl_data_read();
+        gyro_x = (INT)lsm6dsl_data.angular_rate_mdps[0];
+        gyro_y = (INT)lsm6dsl_data.angular_rate_mdps[1];
+        gyro_z = (INT)lsm6dsl_data.angular_rate_mdps[2];
+
+        snprintf(screen_value_str, sizeof(screen_value_str),
+                 "{\"X\":%d,\"Y\":%d,\"Z\":%d}",
+                 gyro_x,
+                 gyro_y,
+                 gyro_z);
+
         ssd1306_SetCursor(0, 20);
         ssd1306_WriteString(screen_value_str, Font_7x10, White);
         ssd1306_UpdateScreen();
-        nxd_mqtt_client_publish(&mqtt_client, TOPIC_NAME,
-                    STRLEN(TOPIC_NAME), (CHAR*)screen_value_str, 
-                    STRLEN(MESSAGE_STRING), 0, QOS1, NX_WAIT_FOREVER);
-        printf("Publish a message with QoS level 1: %s\n", screen_value_str);
+
+        status = nxd_mqtt_client_publish(&mqtt_client, TOPIC_NAME,
+                                         STRLEN(TOPIC_NAME), screen_value_str,
+                                         (UINT)strlen(screen_value_str), 0, QOS1, NX_WAIT_FOREVER);
+        if (status != NX_SUCCESS)
+        {
+            printf("nxd_mqtt_client_publish failed (0x%08x)\r\n", status);
+        }
+        else
+        {
+            printf("Published: %s\r\n", screen_value_str);
+        }
+
+        status = tx_event_flags_get(&mqtt_app_flag, DEMO_MESSAGE_EVENT, TX_OR_CLEAR, &events, TX_NO_WAIT);
+        if ((status == TX_SUCCESS) && (events & DEMO_MESSAGE_EVENT))
+        {
+            printf("[MQTT][RX] event flags=0x%08lx\r\n", events);
+            while (1)
+            {
+                receive_status = nxd_mqtt_client_message_get(&mqtt_client, topic_buffer, sizeof(topic_buffer), &topic_length,
+                                                             message_buffer, sizeof(message_buffer), &message_length);
+                if (receive_status != NXD_MQTT_SUCCESS)
+                {
+                    printf("[MQTT][RX] message_get status=0x%08x\r\n", receive_status);
+                    break;
+                }
+
+                if (topic_length >= sizeof(topic_buffer))
+                {
+                    topic_length = sizeof(topic_buffer) - 1;
+                }
+                if (message_length >= sizeof(message_buffer))
+                {
+                    message_length = sizeof(message_buffer) - 1;
+                }
+                topic_buffer[topic_length] = 0;
+                message_buffer[message_length] = 0;
+                printf("[MQTT][RX] topic=%s (len=%u) payload_len=%u\r\n",
+                       topic_buffer, topic_length, message_length);
+                printf("[MQTT][RX] payload=%s\r\n", message_buffer);
+
+                if (strcmp((CHAR*)topic_buffer, SUBSCRIBE_TOPIC) == 0)
+                {
+                    left_status = read_boolean_value((CHAR*)message_buffer, "\"Vehicle.Body.Lights.DirectionIndicator.Left.IsSignaling\"", &left_signal_on);
+                    if (left_status != NX_SUCCESS)
+                    {
+                        left_section = strstr((CHAR*)message_buffer, "\"Left\"");
+                        if (left_section != NX_NULL)
+                        {
+                            left_status = read_boolean_value(left_section, "\"IsSignaling\"", &left_signal_on);
+                        }
+                    }
+
+                    right_status = read_boolean_value((CHAR*)message_buffer, "\"Vehicle.Body.Lights.DirectionIndicator.Right.IsSignaling\"", &right_signal_on);
+                    if (right_status != NX_SUCCESS)
+                    {
+                        right_section = strstr((CHAR*)message_buffer, "\"Right\"");
+                        if (right_section != NX_NULL)
+                        {
+                            right_status = read_boolean_value(right_section, "\"IsSignaling\"", &right_signal_on);
+                        }
+                    }
+
+                    brake_status = read_boolean_value((CHAR*)message_buffer, "\"Vehicle.Body.Lights.Brake.IsActive\"", &brake_active);
+                    if (brake_status != NX_SUCCESS)
+                    {
+                        brake_section = strstr((CHAR*)message_buffer, "\"Brake\"");
+                        if (brake_section != NX_NULL)
+                        {
+                            brake_status = read_boolean_value(brake_section, "\"IsActive\"", &brake_active);
+                        }
+                    }
+
+                    printf("[MQTT][PARSE] left status=0x%08x value=%u\r\n", left_status, left_signal_on);
+                    printf("[MQTT][PARSE] right status=0x%08x value=%u\r\n", right_status, right_signal_on);
+                    printf("[MQTT][PARSE] brake status=0x%08x value=%u\r\n", brake_status, brake_active);
+                    apply_led_state(left_signal_on, right_signal_on, brake_active);
+                    printf("[MQTT][LED] applied L=%u R=%u B=%u\r\n", left_signal_on, right_signal_on, brake_active);
+                    snprintf(signal_state_str, sizeof(signal_state_str), "L:%u R:%u B:%u", left_signal_on, right_signal_on, brake_active);
+                    ssd1306_SetCursor(0, 40);
+                    ssd1306_WriteString(signal_state_str, Font_7x10, White);
+                    ssd1306_UpdateScreen();
+                }
+                else
+                {
+                    printf("[MQTT][RX] ignored topic (expected=%s)\r\n", SUBSCRIBE_TOPIC);
+                }
+
+                printf("topic = %s, message = %s\r\n", topic_buffer, message_buffer);
+            }
+        }
+        else if (status != TX_NO_EVENTS)
+        {
+            printf("[MQTT][RX] tx_event_flags_get status=0x%08x\r\n", status);
+        }
+
+        /* Keep indicator outputs blinking even when no new MQTT message arrives. */
+        apply_led_state(left_signal_on, right_signal_on, brake_active);
         tx_thread_sleep(20);
     }
 
-    
-    /* Subscribe to the topic with QoS level 0. */
-    status = nxd_mqtt_client_subscribe(&mqtt_client, TOPIC_NAME, STRLEN(TOPIC_NAME), QOS0);
-    if(status)
-        error_counter++;
-    
-    /* Set the receive notify function. */
-    status = nxd_mqtt_client_receive_notify_set(&mqtt_client, my_notify_func);
-    if(status)
-        error_counter++;
-    printf("Error: %lu",error_counter);
-    /* Publish a message with QoS Level 1. */
-    status = nxd_mqtt_client_publish(&mqtt_client, TOPIC_NAME, STRLEN(TOPIC_NAME),
-                                     (CHAR*)MESSAGE_STRING, STRLEN(MESSAGE_STRING), 0, QOS1, NX_WAIT_FOREVER);
-
-
-    /* Now wait for the broker to publish the message. */
-
-    tx_event_flags_get(&mqtt_app_flag, DEMO_ALL_EVENTS, TX_OR_CLEAR, &events, TX_WAIT_FOREVER);
-    if(events & DEMO_MESSAGE_EVENT)
-    {
-        status = nxd_mqtt_client_message_get(&mqtt_client, topic_buffer, sizeof(topic_buffer), &topic_length, 
-                                             message_buffer, sizeof(message_buffer), &message_length);
-        if(status == NXD_MQTT_SUCCESS)
-        {
-            topic_buffer[topic_length] = 0;
-            message_buffer[message_length] = 0;
-            printf("topic = %s, message = %s\n", topic_buffer, message_buffer);
-        }
-    }
-
     /* Now unsubscribe the topic. */
-    nxd_mqtt_client_unsubscribe(&mqtt_client, TOPIC_NAME, STRLEN(TOPIC_NAME));
+    nxd_mqtt_client_unsubscribe(&mqtt_client, SUBSCRIBE_TOPIC, STRLEN(SUBSCRIBE_TOPIC));
 
     /* Disconnect from the broker. */
     nxd_mqtt_client_disconnect(&mqtt_client);
