@@ -27,7 +27,7 @@ typedef enum
 // ----------------------------------------------------------------------------
 // WiFi connection config
 // ----------------------------------------------------------------------------
-#define HOSTNAME      "chheis-eclipse-threadx"  //Change to unique hostname.
+#define HOSTNAME      "chheis-eclipse-threadx-someip"  //Change to unique hostname.
 #define WIFI_SSID     "sdvdemo"          //Change to your WiFi SSID.
 #define WIFI_PASSWORD "Demo1234"          //Change to your WiFi password.
 #define WIFI_MODE     WPA2_PSK_AES

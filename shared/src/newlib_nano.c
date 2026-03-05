@@ -21,6 +21,7 @@
 #include <stdio.h>
 
 #include <sys/stat.h>
+#include <sys/time.h>
 
 extern int errno;
 extern int _end;
@@ -77,6 +78,19 @@ void _kill(int pid, int sig)
 int _getpid(void)
 {
     return -1;
+}
+
+int _gettimeofday(struct timeval* tv, void* tzvp)
+{
+    (void)tzvp;
+
+    if (tv != NULL)
+    {
+        tv->tv_sec = 0;
+        tv->tv_usec = 0;
+    }
+
+    return 0;
 }
 
 // function aliases to support different runtimes

@@ -43,7 +43,13 @@
 
 #define DHCP_WAIT_TIME_TICKS (30 * TX_TIMER_TICKS_PER_SECOND)
 
-#define WIFI_COUNTRY WICED_COUNTRY_WORLD_WIDE_XX
+#ifndef WIFI_COUNTRY_PRIMARY
+#define WIFI_COUNTRY_PRIMARY WICED_COUNTRY_UNITED_STATES
+#endif
+
+#ifndef WIFI_COUNTRY_FALLBACK
+#define WIFI_COUNTRY_FALLBACK WICED_COUNTRY_WORLD_WIDE_XX
+#endif
 
 static UCHAR netx_ip_stack[NETX_IP_STACK_SIZE];
 static UCHAR netx_tx_pool_stack[NETX_TX_POOL_SIZE];
@@ -65,6 +71,27 @@ static NX_DHCP nx_dhcp_client;
 NX_IP nx_ip;
 NX_PACKET_POOL nx_pool[2]; // 0=TX, 1=RX.
 NX_DNS nx_dns_client;
+
+static UINT wifi_power_on(void)
+{
+    wwd_result_t status = wwd_management_wifi_on(WIFI_COUNTRY_PRIMARY);
+    if (status == WWD_SUCCESS)
+    {
+        return NX_SUCCESS;
+    }
+
+    printf("WARN: wwd_management_wifi_on primary country failed (0x%08lx)\r\n", (ULONG)status);
+
+    status = wwd_management_wifi_on(WIFI_COUNTRY_FALLBACK);
+    if (status == WWD_SUCCESS)
+    {
+        printf("INFO: wwd_management_wifi_on fallback country succeeded\r\n");
+        return NX_SUCCESS;
+    }
+
+    printf("ERROR: wwd_management_wifi_on fallback country failed (0x%08lx)\r\n", (ULONG)status);
+    return NX_NOT_SUCCESSFUL;
+}
 
 static void print_address(CHAR* preable, ULONG address)
 {
@@ -97,7 +124,7 @@ static UINT wifi_init()
     }
 
     // Set country
-    if (wwd_management_wifi_on(WIFI_COUNTRY) != WWD_SUCCESS)
+    if (wifi_power_on() != NX_SUCCESS)
     {
         printf("ERROR: wwd_management_wifi_on\r\n");
         return NX_NOT_SUCCESSFUL;
@@ -400,12 +427,12 @@ UINT wwd_network_connect()
     {
         INT bsd_status;
 
-        bsd_status = bsd_initialize(&nx_ip, &nx_pool[0],
-                                    netx_bsd_stack, sizeof(netx_bsd_stack),
-                                    NETX_BSD_THREAD_PRIORITY);
+        bsd_status = nx_bsd_initialize(&nx_ip, &nx_pool[0],
+                                       netx_bsd_stack, sizeof(netx_bsd_stack),
+                                       NETX_BSD_THREAD_PRIORITY);
         if (bsd_status != 0)
         {
-            printf("ERROR: bsd_initialize (%d)\r\n", bsd_status);
+            printf("ERROR: nx_bsd_initialize (%d)\r\n", bsd_status);
             return NX_NOT_SUCCESSFUL;
         }
 

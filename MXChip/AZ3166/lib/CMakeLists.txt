@@ -24,6 +24,9 @@ endif()
 # Core libraries
 add_subdirectory(${SHARED_LIB_DIR}/threadx threadx)
 add_subdirectory(${SHARED_LIB_DIR}/netxduo netxduo)
+if(ENABLE_OPENSOMEIP)
+    target_compile_definitions(netxduo PUBLIC NX_BSD_ENABLE_NATIVE_API)
+endif()
 add_subdirectory(${SHARED_LIB_DIR}/jsmn jsmn)
 add_subdirectory(${SHARED_LIB_DIR}/nanoprintf nanoprintf)
 

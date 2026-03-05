@@ -1,7 +1,7 @@
 #ifndef OPENSOMEIP_NETX_LWIP_DEF_H
 #define OPENSOMEIP_NETX_LWIP_DEF_H
 
-#include "nxd_bsd.h"
+#include "lwip/sockets.h"
 
 #ifndef lwip_htons
 #define lwip_htons htons

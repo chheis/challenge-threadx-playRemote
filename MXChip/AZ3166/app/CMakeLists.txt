@@ -72,11 +72,14 @@ if(ENABLE_OPENSOMEIP)
         azrtos::netxduo
     )
 
+    target_compile_options(opensomeip_embedded PRIVATE -Wno-error)
+
     set_property(TARGET opensomeip_embedded PROPERTY CXX_STANDARD 17)
     set_property(TARGET opensomeip_embedded PROPERTY CXX_STANDARD_REQUIRED ON)
 
     target_link_libraries(${PROJECT_NAME} opensomeip_embedded)
     target_compile_definitions(${PROJECT_NAME} PRIVATE ENABLE_OPENSOMEIP=1)
+    target_compile_options(${PROJECT_NAME} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wno-error>)
     set_property(TARGET ${PROJECT_NAME} PROPERTY CXX_STANDARD 17)
     set_property(TARGET ${PROJECT_NAME} PROPERTY CXX_STANDARD_REQUIRED ON)
 endif()
