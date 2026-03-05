@@ -19,6 +19,9 @@
 #include "nx_secure_tls_api.h"
 #include "nxd_dhcp_client.h"
 #include "nxd_dns.h"
+#if defined(ENABLE_OPENSOMEIP)
+#include "nxd_bsd.h"
+#endif
 
 #include "wiced_sdk.h"
 
@@ -40,12 +43,24 @@
 
 #define DHCP_WAIT_TIME_TICKS (30 * TX_TIMER_TICKS_PER_SECOND)
 
-#define WIFI_COUNTRY WICED_COUNTRY_WORLD_WIDE_XX
+#ifndef WIFI_COUNTRY_PRIMARY
+#define WIFI_COUNTRY_PRIMARY WICED_COUNTRY_UNITED_STATES
+#endif
+
+#ifndef WIFI_COUNTRY_FALLBACK
+#define WIFI_COUNTRY_FALLBACK WICED_COUNTRY_WORLD_WIDE_XX
+#endif
 
 static UCHAR netx_ip_stack[NETX_IP_STACK_SIZE];
 static UCHAR netx_tx_pool_stack[NETX_TX_POOL_SIZE];
 static UCHAR netx_rx_pool_stack[NETX_RX_POOL_SIZE];
 static UCHAR netx_arp_cache_area[NETX_ARP_CACHE_SIZE];
+#if defined(ENABLE_OPENSOMEIP)
+#define NETX_BSD_STACK_SIZE      4096
+#define NETX_BSD_THREAD_PRIORITY 3
+static CHAR netx_bsd_stack[NETX_BSD_STACK_SIZE];
+static UINT netx_bsd_initialized;
+#endif
 
 static CHAR* netx_ssid;
 static CHAR* netx_password;
@@ -56,6 +71,27 @@ static NX_DHCP nx_dhcp_client;
 NX_IP nx_ip;
 NX_PACKET_POOL nx_pool[2]; // 0=TX, 1=RX.
 NX_DNS nx_dns_client;
+
+static UINT wifi_power_on(void)
+{
+    wwd_result_t status = wwd_management_wifi_on(WIFI_COUNTRY_PRIMARY);
+    if (status == WWD_SUCCESS)
+    {
+        return NX_SUCCESS;
+    }
+
+    printf("WARN: wwd_management_wifi_on primary country failed (0x%08lx)\r\n", (ULONG)status);
+
+    status = wwd_management_wifi_on(WIFI_COUNTRY_FALLBACK);
+    if (status == WWD_SUCCESS)
+    {
+        printf("INFO: wwd_management_wifi_on fallback country succeeded\r\n");
+        return NX_SUCCESS;
+    }
+
+    printf("ERROR: wwd_management_wifi_on fallback country failed (0x%08lx)\r\n", (ULONG)status);
+    return NX_NOT_SUCCESSFUL;
+}
 
 static void print_address(CHAR* preable, ULONG address)
 {
@@ -88,7 +124,7 @@ static UINT wifi_init()
     }
 
     // Set country
-    if (wwd_management_wifi_on(WIFI_COUNTRY) != WWD_SUCCESS)
+    if (wifi_power_on() != NX_SUCCESS)
     {
         printf("ERROR: wwd_management_wifi_on\r\n");
         return NX_NOT_SUCCESSFUL;
@@ -385,6 +421,24 @@ UINT wwd_network_connect()
 
         printf("SUCCESS: WiFi connected\r\n");
     }
+
+#if defined(ENABLE_OPENSOMEIP)
+    if (netx_bsd_initialized == 0U)
+    {
+        INT bsd_status;
+
+        bsd_status = nx_bsd_initialize(&nx_ip, &nx_pool[0],
+                                       netx_bsd_stack, sizeof(netx_bsd_stack),
+                                       NETX_BSD_THREAD_PRIORITY);
+        if (bsd_status != 0)
+        {
+            printf("ERROR: nx_bsd_initialize (%d)\r\n", bsd_status);
+            return NX_NOT_SUCCESSFUL;
+        }
+
+        netx_bsd_initialized = 1U;
+    }
+#endif
 
     // Fetch IP details
     if ((status = dhcp_connect()))

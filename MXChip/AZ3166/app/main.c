@@ -26,6 +26,7 @@
 #include "screen.h"
 //#include "sntp_client.h"
 #include "wwd_networking.h"
+#include "someip_vehicle_signals.h"
 
 #include "cloud_config.h"
 //#include "nx_client.h"
@@ -62,13 +63,14 @@ static ULONG                        mqtt_client_stack[MQTT_CLIENT_STACK_SIZE / s
 static NXD_MQTT_CLIENT              mqtt_client;
 /* Define the symbol for signaling a received message. */
 /* Define the test threads.  */
-#define TOPIC_NAME                  "mqtt_data"
 #define SUBSCRIBE_TOPIC             "InVehicleTopics"
 #define MESSAGE_STRING              "This is a message. "
 /* Define the priority of the MQTT internal thread. */
 #define MQTT_THREAD_PRIORITY 2
 /* Define the MQTT keep alive timer for 5 minutes */
 #define MQTT_KEEP_ALIVE_TIMER       300
+#define MQTT_CLEAN_SESSION          1
+#define MQTT_STOP_HOLD_TICKS        (2 * TX_TIMER_TICKS_PER_SECOND)
 #define QOS0                        0
 #define QOS1                        1
 #define MQTT_TOPIC_BUFFER_SIZE      64
@@ -314,10 +316,24 @@ static VOID apply_led_state(UINT left, UINT right, UINT brake)
 static void eclipsetx_thread_entry(ULONG parameter)
 {
     UINT status;
+    UINT someip_status;
     UINT receive_status;
     UINT left_status;
     UINT right_status;
     UINT brake_status;
+    UINT button_a_pressed;
+    UINT button_b_pressed;
+    UINT someip_remote_has_data;
+    UINT someip_remote_left;
+    UINT someip_remote_right;
+    UINT someip_remote_brake;
+    UINT someip_remote_button_a;
+    UINT someip_remote_button_b;
+    UINT keep_running;
+    UINT mqtt_client_created;
+    UINT mqtt_connected;
+    UINT mqtt_subscribed;
+    ULONG stop_hold_start_ticks;
 
     printf("Starting Eclipse ThreadX thread\r\n\r\n");
     NX_PARAMETER_NOT_USED(parameter);
@@ -331,6 +347,9 @@ static void eclipsetx_thread_entry(ULONG parameter)
     status = wwd_network_connect();
     printf("network connect status (0x%08x)\r\n", status);
 
+    someip_status = someip_vehicle_signals_init();
+    printf("[SOMEIP][INIT] status=0x%08x\r\n", someip_status);
+
     NX_IP *test = &nx_ip;
     if (test == NULL) {
         screen_print("E2", L3);
@@ -341,45 +360,62 @@ static void eclipsetx_thread_entry(ULONG parameter)
     //UINT topic_length, message_length;
 
 
-    /* Create MQTT client instance. */
-    status = nxd_mqtt_client_create(&mqtt_client, "my_client",
-        CLIENT_ID_STRING, STRLEN(CLIENT_ID_STRING), &nx_ip, &nx_pool[0],
-        (VOID*)mqtt_client_stack, sizeof(mqtt_client_stack),
-        MQTT_THREAD_PRIORITY, NX_NULL, 0);
-    printf("[MQTT][INIT] nxd_mqtt_client_create status=0x%08x\r\n", status);
-
-    //status = nxd_mqtt_client_create(&mqtt_client, "my_client", CLIENT_ID_STRING, STRLEN(CLIENT_ID_STRING),
-    //                                /*ip_ptr, pool_ptr*/&nx_ip, &nx_pool[2], (VOID*)mqtt_client_stack, sizeof(mqtt_client_stack), 
-    //                               MQTT_THREAD_PRIORTY, NX_NULL, 0);
+    mqtt_client_created = 0U;
+    mqtt_connected = 0U;
+    mqtt_subscribed = 0U;
     
     NXD_ADDRESS server_ip;
     ULONG events;
     UINT topic_length, message_length;
 
-    nxd_mqtt_client_disconnect_notify_set(&mqtt_client, my_disconnect_func);
+    if (SOMEIP_DEVICE_ROLE == 1)
+    {
+        /* Create MQTT client instance only for Device 1 role. */
+        status = nxd_mqtt_client_create(&mqtt_client, "my_client",
+            CLIENT_ID_STRING, STRLEN(CLIENT_ID_STRING), &nx_ip, &nx_pool[0],
+            (VOID*)mqtt_client_stack, sizeof(mqtt_client_stack),
+            MQTT_THREAD_PRIORITY, NX_NULL, 0);
+        printf("[MQTT][INIT] nxd_mqtt_client_create status=0x%08x\r\n", status);
+        if (status == NX_SUCCESS)
+        {
+            mqtt_client_created = 1U;
+        }
 
-    status = tx_event_flags_create(&mqtt_app_flag, "my app event");
-    printf("[MQTT][INIT] tx_event_flags_create status=0x%08x\r\n", status);
-    server_ip.nxd_ip_version = 4;
-    server_ip.nxd_ip_address.v4 = LOCAL_SERVER_ADDRESS;
-    printf("[MQTT][INIT] broker=%lu.%lu.%lu.%lu:%u\r\n",
-           (ULONG)((LOCAL_SERVER_ADDRESS >> 24) & 0xFF),
-           (ULONG)((LOCAL_SERVER_ADDRESS >> 16) & 0xFF),
-           (ULONG)((LOCAL_SERVER_ADDRESS >> 8) & 0xFF),
-           (ULONG)(LOCAL_SERVER_ADDRESS & 0xFF),
-           (UINT)NXD_MQTT_PORT);
-    printf("[MQTT][INIT] buffers topic=%u message=%u\r\n",
-           (UINT)sizeof(topic_buffer), (UINT)sizeof(message_buffer));
+        if (mqtt_client_created != 0U)
+        {
+            nxd_mqtt_client_disconnect_notify_set(&mqtt_client, my_disconnect_func);
 
-    /* Start the connection to the server. */
-    status = nxd_mqtt_client_connect(&mqtt_client, &server_ip, NXD_MQTT_PORT, MQTT_KEEP_ALIVE_TIMER, 0, NX_WAIT_FOREVER);
+            status = tx_event_flags_create(&mqtt_app_flag, "my app event");
+            printf("[MQTT][INIT] tx_event_flags_create status=0x%08x\r\n", status);
+            server_ip.nxd_ip_version = 4;
+            server_ip.nxd_ip_address.v4 = LOCAL_SERVER_ADDRESS;
+            printf("[MQTT][INIT] broker=%lu.%lu.%lu.%lu:%u\r\n",
+                   (ULONG)((LOCAL_SERVER_ADDRESS >> 24) & 0xFF),
+                   (ULONG)((LOCAL_SERVER_ADDRESS >> 16) & 0xFF),
+                   (ULONG)((LOCAL_SERVER_ADDRESS >> 8) & 0xFF),
+                   (ULONG)(LOCAL_SERVER_ADDRESS & 0xFF),
+                   (UINT)NXD_MQTT_PORT);
+            printf("[MQTT][INIT] buffers topic=%u message=%u\r\n",
+                   (UINT)sizeof(topic_buffer), (UINT)sizeof(message_buffer));
 
-    if (status != TX_SUCCESS) {
-        printf("nxd_mqtt_client_connect (0x%08x)\r\n", status);
+            /* Start the connection to the server. */
+            status = nxd_mqtt_client_connect(&mqtt_client, &server_ip, NXD_MQTT_PORT,
+                                             MQTT_KEEP_ALIVE_TIMER, MQTT_CLEAN_SESSION, NX_WAIT_FOREVER);
+
+            if (status != TX_SUCCESS)
+            {
+                printf("nxd_mqtt_client_connect (0x%08x)\r\n", status);
+            }
+            else
+            {
+                mqtt_connected = 1U;
+                printf("[MQTT][INIT] connected\r\n");
+            }
+        }
     }
     else
     {
-        printf("[MQTT][INIT] connected\r\n");
+        printf("[MQTT][INIT] skipped for SOMEIP_DEVICE_ROLE=%u\r\n", (UINT)SOMEIP_DEVICE_ROLE);
     }
 
     // if (status)
@@ -392,11 +428,14 @@ static void eclipsetx_thread_entry(ULONG parameter)
     
 
 #ifdef NXD_MQTT_OVER_WEBSOCKET
-    status = nxd_mqtt_client_websocket_set(&mqtt_client, (UCHAR *)"test.mosquitto.org", sizeof("test.mosquitto.org") - 1,
-                                           (UCHAR *)"/mqtt", sizeof("/mqtt") - 1);
-    if (status)
+    if (mqtt_client_created != 0U)
     {
-        printf("Error in setting MQTT over WebSocket: 0x%02x\r\n", status);
+        status = nxd_mqtt_client_websocket_set(&mqtt_client, (UCHAR *)"test.mosquitto.org", sizeof("test.mosquitto.org") - 1,
+                                               (UCHAR *)"/mqtt", sizeof("/mqtt") - 1);
+        if (status)
+        {
+            printf("Error in setting MQTT over WebSocket: 0x%02x\r\n", status);
+        }
     }
 #endif /* NXD_MQTT_OVER_WEBSOCKET */
 
@@ -432,149 +471,226 @@ static void eclipsetx_thread_entry(ULONG parameter)
     // }
     // ScreenShowValue(error_counter);
 
-    lsm6dsl_data_t lsm6dsl_data;
-    CHAR screen_value_str[96];
+    CHAR ip_display_str[24];
     CHAR signal_state_str[21];
+    CHAR someip_remote_state_str[22];
     CHAR* left_section;
     CHAR* right_section;
     CHAR* brake_section;
 
-    /* Subscribe and register receive callback before entering the publish loop. */
-    status = nxd_mqtt_client_subscribe(&mqtt_client, SUBSCRIBE_TOPIC, STRLEN(SUBSCRIBE_TOPIC), QOS0);
-    if (status != NX_SUCCESS)
+    if (mqtt_connected != 0U)
     {
-        printf("nxd_mqtt_client_subscribe failed (0x%08x)\r\n", status);
-    }
-    else
-    {
-        printf("[MQTT][SUB] subscribed topic=%s qos=%u\r\n", SUBSCRIBE_TOPIC, QOS0);
-    }
-
-    status = nxd_mqtt_client_receive_notify_set(&mqtt_client, my_notify_func);
-    if (status != NX_SUCCESS)
-    {
-        printf("nxd_mqtt_client_receive_notify_set failed (0x%08x)\r\n", status);
-    }
-    else
-    {
-        printf("[MQTT][SUB] receive notify registered\r\n");
-    }
-
-    printf("Go for Loop forever\r\n");
-    while (1)
-    {
-        INT gyro_x;
-        INT gyro_y;
-        INT gyro_z;
-
-        lsm6dsl_data = lsm6dsl_data_read();
-        gyro_x = (INT)lsm6dsl_data.angular_rate_mdps[0];
-        gyro_y = (INT)lsm6dsl_data.angular_rate_mdps[1];
-        gyro_z = (INT)lsm6dsl_data.angular_rate_mdps[2];
-
-        snprintf(screen_value_str, sizeof(screen_value_str),
-                 "{\"X\":%d,\"Y\":%d,\"Z\":%d}",
-                 gyro_x,
-                 gyro_y,
-                 gyro_z);
-
-        ssd1306_SetCursor(0, 20);
-        ssd1306_WriteString(screen_value_str, Font_7x10, White);
-        ssd1306_UpdateScreen();
-
-        status = nxd_mqtt_client_publish(&mqtt_client, TOPIC_NAME,
-                                         STRLEN(TOPIC_NAME), screen_value_str,
-                                         (UINT)strlen(screen_value_str), 0, QOS1, NX_WAIT_FOREVER);
+        /* Subscribe and register receive callback before entering the publish loop. */
+        status = nxd_mqtt_client_subscribe(&mqtt_client, SUBSCRIBE_TOPIC, STRLEN(SUBSCRIBE_TOPIC), QOS0);
         if (status != NX_SUCCESS)
         {
-            printf("nxd_mqtt_client_publish failed (0x%08x)\r\n", status);
+            printf("nxd_mqtt_client_subscribe failed (0x%08x)\r\n", status);
         }
         else
         {
-            printf("Published: %s\r\n", screen_value_str);
+            mqtt_subscribed = 1U;
+            printf("[MQTT][SUB] subscribed topic=%s qos=%u\r\n", SUBSCRIBE_TOPIC, QOS0);
         }
 
-        status = tx_event_flags_get(&mqtt_app_flag, DEMO_MESSAGE_EVENT, TX_OR_CLEAR, &events, TX_NO_WAIT);
-        if ((status == TX_SUCCESS) && (events & DEMO_MESSAGE_EVENT))
+        status = nxd_mqtt_client_receive_notify_set(&mqtt_client, my_notify_func);
+        if (status != NX_SUCCESS)
         {
-            printf("[MQTT][RX] event flags=0x%08lx\r\n", events);
-            while (1)
+            printf("nxd_mqtt_client_receive_notify_set failed (0x%08x)\r\n", status);
+        }
+        else
+        {
+            printf("[MQTT][SUB] receive notify registered\r\n");
+        }
+    }
+
+    printf("Go for Loop forever\r\n");
+    keep_running = 1U;
+    stop_hold_start_ticks = 0U;
+    while (keep_running != 0U)
+    {
+        UINT ip_status;
+        ULONG ip_address;
+        ULONG network_mask;
+        ULONG now_ticks;
+
+        ip_status = nx_ip_address_get(&nx_ip, &ip_address, &network_mask);
+        if ((ip_status == NX_SUCCESS) && (ip_address != 0U))
+        {
+            snprintf(ip_display_str, sizeof(ip_display_str), "IP:%lu.%lu.%lu.%lu   ",
+                     (ULONG)((ip_address >> 24) & 0xFFU),
+                     (ULONG)((ip_address >> 16) & 0xFFU),
+                     (ULONG)((ip_address >> 8) & 0xFFU),
+                     (ULONG)(ip_address & 0xFFU));
+        }
+        else
+        {
+            snprintf(ip_display_str, sizeof(ip_display_str), "IP: waiting...       ");
+        }
+
+        ssd1306_SetCursor(0, 20);
+        ssd1306_WriteString(ip_display_str, Font_7x10, White);
+        ssd1306_UpdateScreen();
+
+        if (mqtt_connected != 0U)
+        {
+            status = tx_event_flags_get(&mqtt_app_flag, DEMO_MESSAGE_EVENT, TX_OR_CLEAR, &events, TX_NO_WAIT);
+            if ((status == TX_SUCCESS) && (events & DEMO_MESSAGE_EVENT))
             {
-                receive_status = nxd_mqtt_client_message_get(&mqtt_client, topic_buffer, sizeof(topic_buffer), &topic_length,
-                                                             message_buffer, sizeof(message_buffer), &message_length);
-                if (receive_status != NXD_MQTT_SUCCESS)
+                printf("[MQTT][RX] event flags=0x%08lx\r\n", events);
+                while (1)
                 {
-                    printf("[MQTT][RX] message_get status=0x%08x\r\n", receive_status);
-                    break;
-                }
-
-                if (topic_length >= sizeof(topic_buffer))
-                {
-                    topic_length = sizeof(topic_buffer) - 1;
-                }
-                if (message_length >= sizeof(message_buffer))
-                {
-                    message_length = sizeof(message_buffer) - 1;
-                }
-                topic_buffer[topic_length] = 0;
-                message_buffer[message_length] = 0;
-                printf("[MQTT][RX] topic=%s (len=%u) payload_len=%u\r\n",
-                       topic_buffer, topic_length, message_length);
-                printf("[MQTT][RX] payload=%s\r\n", message_buffer);
-
-                if (strcmp((CHAR*)topic_buffer, SUBSCRIBE_TOPIC) == 0)
-                {
-                    left_status = read_boolean_value((CHAR*)message_buffer, "\"Vehicle.Body.Lights.DirectionIndicator.Left.IsSignaling\"", &left_signal_on);
-                    if (left_status != NX_SUCCESS)
+                    receive_status = nxd_mqtt_client_message_get(&mqtt_client, topic_buffer, sizeof(topic_buffer), &topic_length,
+                                                                 message_buffer, sizeof(message_buffer), &message_length);
+                    if (receive_status != NXD_MQTT_SUCCESS)
                     {
-                        left_section = strstr((CHAR*)message_buffer, "\"Left\"");
-                        if (left_section != NX_NULL)
-                        {
-                            left_status = read_boolean_value(left_section, "\"IsSignaling\"", &left_signal_on);
-                        }
+                        printf("[MQTT][RX] message_get status=0x%08x\r\n", receive_status);
+                        break;
                     }
 
-                    right_status = read_boolean_value((CHAR*)message_buffer, "\"Vehicle.Body.Lights.DirectionIndicator.Right.IsSignaling\"", &right_signal_on);
-                    if (right_status != NX_SUCCESS)
+                    if (topic_length >= sizeof(topic_buffer))
                     {
-                        right_section = strstr((CHAR*)message_buffer, "\"Right\"");
-                        if (right_section != NX_NULL)
+                        topic_length = sizeof(topic_buffer) - 1;
+                    }
+                    if (message_length >= sizeof(message_buffer))
+                    {
+                        message_length = sizeof(message_buffer) - 1;
+                    }
+                    topic_buffer[topic_length] = 0;
+                    message_buffer[message_length] = 0;
+                    printf("[MQTT][RX] topic=%s (len=%u) payload_len=%u\r\n",
+                           topic_buffer, topic_length, message_length);
+                    printf("[MQTT][RX] payload=%s\r\n", message_buffer);
+
+                    if (strcmp((CHAR*)topic_buffer, SUBSCRIBE_TOPIC) == 0)
+                    {
+                        left_status = read_boolean_value((CHAR*)message_buffer, "\"Vehicle.Body.Lights.DirectionIndicator.Left.IsSignaling\"", &left_signal_on);
+                        if (left_status != NX_SUCCESS)
                         {
-                            right_status = read_boolean_value(right_section, "\"IsSignaling\"", &right_signal_on);
+                            left_section = strstr((CHAR*)message_buffer, "\"Left\"");
+                            if (left_section != NX_NULL)
+                            {
+                                left_status = read_boolean_value(left_section, "\"IsSignaling\"", &left_signal_on);
+                            }
                         }
+
+                        right_status = read_boolean_value((CHAR*)message_buffer, "\"Vehicle.Body.Lights.DirectionIndicator.Right.IsSignaling\"", &right_signal_on);
+                        if (right_status != NX_SUCCESS)
+                        {
+                            right_section = strstr((CHAR*)message_buffer, "\"Right\"");
+                            if (right_section != NX_NULL)
+                            {
+                                right_status = read_boolean_value(right_section, "\"IsSignaling\"", &right_signal_on);
+                            }
+                        }
+
+                        brake_status = read_boolean_value((CHAR*)message_buffer, "\"Vehicle.Body.Lights.Brake.IsActive\"", &brake_active);
+                        if (brake_status != NX_SUCCESS)
+                        {
+                            brake_section = strstr((CHAR*)message_buffer, "\"Brake\"");
+                            if (brake_section != NX_NULL)
+                            {
+                                brake_status = read_boolean_value(brake_section, "\"IsActive\"", &brake_active);
+                            }
+                        }
+
+                        printf("[MQTT][PARSE] left status=0x%08x value=%u\r\n", left_status, left_signal_on);
+                        printf("[MQTT][PARSE] right status=0x%08x value=%u\r\n", right_status, right_signal_on);
+                        printf("[MQTT][PARSE] brake status=0x%08x value=%u\r\n", brake_status, brake_active);
+                        apply_led_state(left_signal_on, right_signal_on, brake_active);
+                        printf("[MQTT][LED] applied L=%u R=%u B=%u\r\n", left_signal_on, right_signal_on, brake_active);
+                        snprintf(signal_state_str, sizeof(signal_state_str), "L:%u R:%u B:%u", left_signal_on, right_signal_on, brake_active);
+                        ssd1306_SetCursor(0, 40);
+                        ssd1306_WriteString(signal_state_str, Font_7x10, White);
+                        ssd1306_UpdateScreen();
+                    }
+                    else
+                    {
+                        printf("[MQTT][RX] ignored topic (expected=%s)\r\n", SUBSCRIBE_TOPIC);
                     }
 
-                    brake_status = read_boolean_value((CHAR*)message_buffer, "\"Vehicle.Body.Lights.Brake.IsActive\"", &brake_active);
-                    if (brake_status != NX_SUCCESS)
-                    {
-                        brake_section = strstr((CHAR*)message_buffer, "\"Brake\"");
-                        if (brake_section != NX_NULL)
-                        {
-                            brake_status = read_boolean_value(brake_section, "\"IsActive\"", &brake_active);
-                        }
-                    }
-
-                    printf("[MQTT][PARSE] left status=0x%08x value=%u\r\n", left_status, left_signal_on);
-                    printf("[MQTT][PARSE] right status=0x%08x value=%u\r\n", right_status, right_signal_on);
-                    printf("[MQTT][PARSE] brake status=0x%08x value=%u\r\n", brake_status, brake_active);
-                    apply_led_state(left_signal_on, right_signal_on, brake_active);
-                    printf("[MQTT][LED] applied L=%u R=%u B=%u\r\n", left_signal_on, right_signal_on, brake_active);
-                    snprintf(signal_state_str, sizeof(signal_state_str), "L:%u R:%u B:%u", left_signal_on, right_signal_on, brake_active);
-                    ssd1306_SetCursor(0, 40);
-                    ssd1306_WriteString(signal_state_str, Font_7x10, White);
-                    ssd1306_UpdateScreen();
+                    printf("topic = %s, message = %s\r\n", topic_buffer, message_buffer);
                 }
-                else
-                {
-                    printf("[MQTT][RX] ignored topic (expected=%s)\r\n", SUBSCRIBE_TOPIC);
-                }
-
-                printf("topic = %s, message = %s\r\n", topic_buffer, message_buffer);
+            }
+            else if (status != TX_NO_EVENTS)
+            {
+                printf("[MQTT][RX] tx_event_flags_get status=0x%08x\r\n", status);
             }
         }
-        else if (status != TX_NO_EVENTS)
+
+        button_a_pressed = BUTTON_A_IS_PRESSED ? 1U : 0U;
+        button_b_pressed = BUTTON_B_IS_PRESSED ? 1U : 0U;
+
+        someip_vehicle_signals_poll_receive();
+        someip_vehicle_signals_get_remote_state(&someip_remote_has_data,
+                                                &someip_remote_left,
+                                                &someip_remote_right,
+                                                &someip_remote_brake,
+                                                &someip_remote_button_a,
+                                                &someip_remote_button_b);
+        if (SOMEIP_DEVICE_ROLE == 2)
         {
-            printf("[MQTT][RX] tx_event_flags_get status=0x%08x\r\n", status);
+            if (someip_remote_has_data != 0U)
+            {
+                left_signal_on = someip_remote_left;
+                right_signal_on = someip_remote_right;
+                brake_active = someip_remote_brake;
+            }
+            else
+            {
+                left_signal_on = 0U;
+                right_signal_on = 0U;
+                brake_active = 0U;
+            }
+
+            snprintf(signal_state_str, sizeof(signal_state_str), "L:%u R:%u B:%u",
+                     left_signal_on, right_signal_on, brake_active);
+            ssd1306_SetCursor(0, 40);
+            ssd1306_WriteString(signal_state_str, Font_7x10, White);
+            ssd1306_UpdateScreen();
+        }
+        if (someip_remote_has_data != 0U)
+        {
+            snprintf(someip_remote_state_str, sizeof(someip_remote_state_str),
+                     "SIP L%uR%uB%u A%uB%u   ",
+                     someip_remote_left,
+                     someip_remote_right,
+                     someip_remote_brake,
+                     someip_remote_button_a,
+                     someip_remote_button_b);
+        }
+        else
+        {
+            snprintf(someip_remote_state_str, sizeof(someip_remote_state_str),
+                     "SIP waiting...       ");
+        }
+        ssd1306_SetCursor(0, 54);
+        ssd1306_WriteString(someip_remote_state_str, Font_6x8, White);
+        ssd1306_UpdateScreen();
+
+        someip_vehicle_signals_publish(left_signal_on,
+                                       right_signal_on,
+                                       brake_active,
+                                       button_a_pressed,
+                                       button_b_pressed);
+
+        /* Hold both buttons for 2s to gracefully unsubscribe/disconnect. */
+        now_ticks = tx_time_get();
+        if ((button_a_pressed != 0U) && (button_b_pressed != 0U))
+        {
+            if (stop_hold_start_ticks == 0U)
+            {
+                stop_hold_start_ticks = now_ticks;
+            }
+            else if ((ULONG)(now_ticks - stop_hold_start_ticks) >= MQTT_STOP_HOLD_TICKS)
+            {
+                printf("[MQTT][CTRL] stop requested, starting cleanup\r\n");
+                keep_running = 0U;
+                continue;
+            }
+        }
+        else
+        {
+            stop_hold_start_ticks = 0U;
         }
 
         /* Keep indicator outputs blinking even when no new MQTT message arrives. */
@@ -582,19 +698,33 @@ static void eclipsetx_thread_entry(ULONG parameter)
         tx_thread_sleep(20);
     }
 
-    /* Now unsubscribe the topic. */
-    nxd_mqtt_client_unsubscribe(&mqtt_client, SUBSCRIBE_TOPIC, STRLEN(SUBSCRIBE_TOPIC));
+    if (mqtt_subscribed != 0U)
+    {
+        /* Now unsubscribe the topic. */
+        status = nxd_mqtt_client_unsubscribe(&mqtt_client, SUBSCRIBE_TOPIC, STRLEN(SUBSCRIBE_TOPIC));
+        printf("[MQTT][CLEANUP] unsubscribe status=0x%08x\r\n", status);
+    }
 
-    /* Disconnect from the broker. */
-    nxd_mqtt_client_disconnect(&mqtt_client);
+    if (mqtt_connected != 0U)
+    {
+        /* Disconnect from the broker. */
+        status = nxd_mqtt_client_disconnect(&mqtt_client);
+        printf("[MQTT][CLEANUP] disconnect status=0x%08x\r\n", status);
+    }
 
-    /* Delete the client instance, release all the resources. */
-    nxd_mqtt_client_delete(&mqtt_client);
-    tx_thread_sleep(1000);
-
-    ssd1306_SetCursor(20, 30);
-    ssd1306_WriteString("Bye", Font_11x18,White);
+    if (mqtt_client_created != 0U)
+    {
+        /* Delete the client instance, release all the resources. */
+        status = nxd_mqtt_client_delete(&mqtt_client);
+        printf("[MQTT][CLEANUP] delete status=0x%08x\r\n", status);
+    }
+    someip_vehicle_signals_deinit();
+    printf("Bye\r\n");
+    ssd1306_Fill(Black);
+    ssd1306_SetCursor(34, 26);
+    ssd1306_WriteString("Bye", Font_11x18, White);
     ssd1306_UpdateScreen();
+    tx_thread_sleep(1000);
 
     return;
 

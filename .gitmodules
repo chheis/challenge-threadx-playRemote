@@ -4,3 +4,6 @@
 [submodule "shared/lib/netxduo"]
 	path = shared/lib/netxduo
 	url = https://github.com/eclipse-threadx/netxduo.git
+[submodule "third_party/opensomeip"]
+	path = third_party/opensomeip
+	url = https://github.com/chheis/opensomeip

@@ -32,6 +32,18 @@ include(utilities)
 # CXX enables IntelliSense only. Sources are still compiled as C.
 project(mxchip_threadx C CXX ASM)
 
+# ---------------------------------------------------------------------------
+# Optional OpenSOME/IP integration (disabled by default).
+# ---------------------------------------------------------------------------
+option(ENABLE_OPENSOMEIP "Enable OpenSOME/IP-based signal publishing" OFF)
+set(OPENSOMEIP_SOURCE_DIR "${GSG_BASE_DIR}/third_party/opensomeip"
+    CACHE PATH "Path to the OpenSOME/IP source tree")
+set(SOMEIP_DEVICE_ROLE "1" CACHE STRING "SOME/IP endpoint profile (1 or 2)")
+set_property(CACHE SOMEIP_DEVICE_ROLE PROPERTY STRINGS 1 2)
+if(NOT SOMEIP_DEVICE_ROLE MATCHES "^[12]$")
+    message(FATAL_ERROR "SOMEIP_DEVICE_ROLE must be 1 or 2 (current: ${SOMEIP_DEVICE_ROLE})")
+endif()
+
 add_subdirectory(${SHARED_SRC_DIR} shared_src)
 add_subdirectory(lib)
 add_subdirectory(app)

@@ -23,7 +23,7 @@ This starter application is an adaptation of a sample developed originally by Mi
 We removed code providing support for Azure IoT Cloud. The only board supported is the MXChip AZ3166 for the time being.
 
 ## Cloning this repository
-Eclipse ThreadX and Eclipse ThreadX NetX Duo are included as submodules.
+Eclipse ThreadX, Eclipse ThreadX NetX Duo, and OpenSOME/IP are included as submodules.
 
 When cloning, you must specify the `--recurse-submodules` option to get the code for the submodules. If you forget this option, just run the following commands in the root folder of your clone. 
 
@@ -109,7 +109,118 @@ winget install --id=Kitware.CMake  -e
 ```
 
 ## Compiling and running the application
-To compile the application, simply execute the relevant script found in the `MXChip/AZ3166/scripts` folder.
+
+### Default build (without OpenSOME/IP)
+To compile the application with the default configuration, execute the relevant script in `MXChip/AZ3166/scripts`:
+
+**Windows**
+```bat
+MXChip\AZ3166\scripts\build.bat
+```
+
+**Linux / macOS**
+```bash
+./MXChip/AZ3166/scripts/build.sh
+```
+
+### Build with OpenSOME/IP enabled
+OpenSOME/IP support is optional and enabled through CMake flags.
+
+1. Make sure submodules are available (including `third_party/opensomeip`):
+```bash
+git submodule update --init --recursive
+```
+
+2. Build using the SOME/IP scripts in `MXChip/AZ3166/scripts`:
+
+**Windows**
+```bat
+MXChip\AZ3166\scripts\build-with-someip.bat 1
+MXChip\AZ3166\scripts\build-with-someip.bat 2
+```
+
+**Linux / macOS**
+```bash
+./MXChip/AZ3166/scripts/build-with-someip.sh 1
+./MXChip/AZ3166/scripts/build-with-someip.sh 2
+```
+
+3. (Optional) Configure and build manually:
+
+**Windows (PowerShell)**
+```powershell
+cd MXChip/AZ3166
+cmake -B build -GNinja -DCMAKE_TOOLCHAIN_FILE="../../../cmake/arm-gcc-cortex-m4.cmake" -DENABLE_OPENSOMEIP=ON -DSOMEIP_DEVICE_ROLE=1 -DOPENSOMEIP_SOURCE_DIR="../../third_party/opensomeip"
+cmake --build build
+```
+
+**Linux / macOS**
+```bash
+cd MXChip/AZ3166
+cmake -B build -GNinja -DCMAKE_TOOLCHAIN_FILE=../../../cmake/arm-gcc-cortex-m4.cmake -DENABLE_OPENSOMEIP=ON -DSOMEIP_DEVICE_ROLE=1 -DOPENSOMEIP_SOURCE_DIR=../../third_party/opensomeip
+cmake --build build
+```
+
+By default, `OPENSOMEIP_SOURCE_DIR` is expected at `third_party/opensomeip`, so you can omit that flag if you keep the default layout.
+`SOMEIP_DEVICE_ROLE` supports `1` or `2` and selects the local/target SOME/IP endpoint profile for each board.
+
+When OpenSOME/IP is enabled, select the profile with:
+- `SOMEIP_DEVICE_ROLE` (`1` or `2`, passed via CMake)
+
+Endpoint values are selected automatically in `MXChip/AZ3166/app/cloud_config.h` based on `SOMEIP_DEVICE_ROLE`:
+- `SOMEIP_SIGNAL_TARGET_IP`
+- `SOMEIP_SIGNAL_TARGET_PORT`
+- `SOMEIP_SIGNAL_LOCAL_IP`
+- `SOMEIP_SIGNAL_LOCAL_PORT`
+
+Protocol IDs in `MXChip/AZ3166/app/cloud_config.h`:
+- `SOMEIP_SIGNAL_SERVICE_ID`
+- `SOMEIP_SIGNAL_EVENT_ID`
+- `SOMEIP_SIGNAL_CLIENT_ID`
+- `SOMEIP_SIGNAL_INTERFACE_VERSION`
+
+Current SOME/IP payload format is:
+- `[left, right, brake, button_a, button_b]` (5 bytes, each value is `0` or `1`)
+
+At runtime, serial logs include:
+- `[SOMEIP][TX] ...` for transmitted notifications
+- `[SOMEIP][RX] ...` for received notifications
+
+### SOME/IP with two AZ3166 boards
+Use opposite local/target endpoints on each board so each one can both send and receive notifications.
+
+Example:
+- Board A: local `192.168.88.91:30490`, target `192.168.88.92:30500`
+- Board B: local `192.168.88.92:30500`, target `192.168.88.91:30490`
+
+Both boards must use the same:
+- `SOMEIP_SIGNAL_SERVICE_ID`
+- `SOMEIP_SIGNAL_EVENT_ID`
+
+On the OLED, the remote SOME/IP state is shown on an additional line as:
+- `SIP LxRxBx AxBx`
+
+### Runtime cleanup (MQTT unsubscribe/disconnect)
+To force a graceful cleanup from the device (unsubscribe + disconnect + client delete):
+- Hold **Button A + Button B** for about 2 seconds
+
+This avoids leaving stale broker-side state when stopping the app manually.
+
+### Packet capture (Wireshark / RouterOS)
+To verify SOME/IP UDP traffic on WiFi:
+
+- Wireshark display filter:
+  - `udp.port == 30490 || udp.port == 30500`
+- If SOME/IP dissector is available:
+  - `someip`
+
+Optional IP-scoped filter example:
+- `ip.addr == 192.168.88.91 && (udp.port == 30490 || udp.port == 30500)`
+
+For MikroTik RouterOS packet sniffer, use a filter on:
+- protocol: UDP
+- port: `30490,30500`
+- source/destination IP: your AZ3166 addresses
 
 To deploy your code on the AZ3166, just plug the board on your computer. When you do so, this will create a virtual drive and a serial port over USB. On my Windows laptop, the board appears as the `d:` drive and the `COM4` serial port. 
 
