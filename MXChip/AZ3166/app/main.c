@@ -63,7 +63,6 @@ static ULONG                        mqtt_client_stack[MQTT_CLIENT_STACK_SIZE / s
 static NXD_MQTT_CLIENT              mqtt_client;
 /* Define the symbol for signaling a received message. */
 /* Define the test threads.  */
-#define TOPIC_NAME                  "mqtt_data"
 #define SUBSCRIBE_TOPIC             "InVehicleTopics"
 #define MESSAGE_STRING              "This is a message. "
 /* Define the priority of the MQTT internal thread. */
@@ -389,7 +388,6 @@ static void eclipsetx_thread_entry(ULONG parameter)
            (UINT)sizeof(topic_buffer), (UINT)sizeof(message_buffer));
 
     /* Start the connection to the server. */
-    status = nxd_mqtt_client_connect(&mqtt_client, &server_ip, NXD_MQTT_PORT, MQTT_KEEP_ALIVE_TIMER, 0, NX_WAIT_FOREVER);
     status = nxd_mqtt_client_connect(&mqtt_client, &server_ip, NXD_MQTT_PORT,
                                      MQTT_KEEP_ALIVE_TIMER, MQTT_CLEAN_SESSION, NX_WAIT_FOREVER);
 
@@ -451,8 +449,7 @@ static void eclipsetx_thread_entry(ULONG parameter)
     // }
     // ScreenShowValue(error_counter);
 
-    lsm6dsl_data_t lsm6dsl_data;
-    CHAR screen_value_str[96];
+    CHAR ip_display_str[24];
     CHAR signal_state_str[21];
     CHAR someip_remote_state_str[22];
     CHAR* left_section;
@@ -485,37 +482,28 @@ static void eclipsetx_thread_entry(ULONG parameter)
     stop_hold_start_ticks = 0U;
     while (keep_running != 0U)
     {
-        INT gyro_x;
-        INT gyro_y;
-        INT gyro_z;
+        UINT ip_status;
+        ULONG ip_address;
+        ULONG network_mask;
         ULONG now_ticks;
 
-        lsm6dsl_data = lsm6dsl_data_read();
-        gyro_x = (INT)lsm6dsl_data.angular_rate_mdps[0];
-        gyro_y = (INT)lsm6dsl_data.angular_rate_mdps[1];
-        gyro_z = (INT)lsm6dsl_data.angular_rate_mdps[2];
-
-        snprintf(screen_value_str, sizeof(screen_value_str),
-                 "{\"X\":%d,\"Y\":%d,\"Z\":%d}",
-                 gyro_x,
-                 gyro_y,
-                 gyro_z);
-
-        ssd1306_SetCursor(0, 20);
-        ssd1306_WriteString(screen_value_str, Font_7x10, White);
-        ssd1306_UpdateScreen();
-
-        status = nxd_mqtt_client_publish(&mqtt_client, TOPIC_NAME,
-                                         STRLEN(TOPIC_NAME), screen_value_str,
-                                         (UINT)strlen(screen_value_str), 0, QOS1, NX_WAIT_FOREVER);
-        if (status != NX_SUCCESS)
+        ip_status = nx_ip_address_get(&nx_ip, &ip_address, &network_mask);
+        if ((ip_status == NX_SUCCESS) && (ip_address != 0U))
         {
-            printf("nxd_mqtt_client_publish failed (0x%08x)\r\n", status);
+            snprintf(ip_display_str, sizeof(ip_display_str), "IP:%lu.%lu.%lu.%lu   ",
+                     (ULONG)((ip_address >> 24) & 0xFFU),
+                     (ULONG)((ip_address >> 16) & 0xFFU),
+                     (ULONG)((ip_address >> 8) & 0xFFU),
+                     (ULONG)(ip_address & 0xFFU));
         }
         else
         {
-            printf("Published: %s\r\n", screen_value_str);
+            snprintf(ip_display_str, sizeof(ip_display_str), "IP: waiting...       ");
         }
+
+        ssd1306_SetCursor(0, 20);
+        ssd1306_WriteString(ip_display_str, Font_7x10, White);
+        ssd1306_UpdateScreen();
 
         status = tx_event_flags_get(&mqtt_app_flag, DEMO_MESSAGE_EVENT, TX_OR_CLEAR, &events, TX_NO_WAIT);
         if ((status == TX_SUCCESS) && (events & DEMO_MESSAGE_EVENT))

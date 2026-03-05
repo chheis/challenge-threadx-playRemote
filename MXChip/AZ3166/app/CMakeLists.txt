@@ -36,6 +36,7 @@ if(ENABLE_OPENSOMEIP)
 endif()
 
 add_executable(${PROJECT_NAME} ${SOURCES})
+target_compile_definitions(${PROJECT_NAME} PRIVATE SOMEIP_DEVICE_ROLE=${SOMEIP_DEVICE_ROLE})
 
 target_link_libraries(${PROJECT_NAME}
     azrtos::threadx
