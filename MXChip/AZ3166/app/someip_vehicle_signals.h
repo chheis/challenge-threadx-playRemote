@@ -25,6 +25,13 @@ VOID someip_vehicle_signals_publish(UINT left_on,
                                     UINT brake_on,
                                     UINT button_a_pressed,
                                     UINT button_b_pressed);
+VOID someip_vehicle_signals_poll_receive(void);
+UINT someip_vehicle_signals_get_remote_state(UINT* has_data,
+                                             UINT* left_on,
+                                             UINT* right_on,
+                                             UINT* brake_on,
+                                             UINT* button_a_pressed,
+                                             UINT* button_b_pressed);
 
 #ifdef __cplusplus
 }

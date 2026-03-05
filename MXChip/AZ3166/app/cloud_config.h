@@ -27,7 +27,7 @@ typedef enum
 // ----------------------------------------------------------------------------
 // WiFi connection config
 // ----------------------------------------------------------------------------
-#define HOSTNAME      "chheis-eclipse-threadx-someip"  //Change to unique hostname.
+#define HOSTNAME      "chheis-eclipse-threadx-someip-reciever"  //Change to unique hostname.
 #define WIFI_SSID     "sdvdemo"          //Change to your WiFi SSID.
 #define WIFI_PASSWORD "Demo1234"          //Change to your WiFi password.
 #define WIFI_MODE     WPA2_PSK_AES
@@ -40,10 +40,10 @@ typedef enum
 // SOME/IP signal publisher config
 // ----------------------------------------------------------------------------
 // Set target endpoint for receiving SOME/IP notifications from this board.
-#define SOMEIP_SIGNAL_TARGET_IP "192.168.88.101"
-#define SOMEIP_SIGNAL_TARGET_PORT 30500
+#define SOMEIP_SIGNAL_TARGET_IP "192.168.88.91" //device 1: "192.168.88.91" //device 2: "192.168.88.92"
+#define SOMEIP_SIGNAL_TARGET_PORT 30500 //device 1: 30490, device 2: 30500
 #define SOMEIP_SIGNAL_LOCAL_IP "0.0.0.0"
-#define SOMEIP_SIGNAL_LOCAL_PORT 30490
+#define SOMEIP_SIGNAL_LOCAL_PORT 30490 //device 1: 30500, device 2: 30490
 
 // SOME/IP IDs used by this board for signal notification payload:
 // [left, right, brake, button_a, button_b] (each 1 byte, 0/1).

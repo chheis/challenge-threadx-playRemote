@@ -141,8 +141,84 @@ public:
         if (transport_->send_message(msg, target_endpoint_) == someip::Result::SUCCESS) {
             last_payload_ = payload;
             has_last_payload_ = true;
+            printf("[SOMEIP][TX] to %s:%u L=%u R=%u B=%u A=%u B=%u session=0x%04x\r\n",
+                   SOMEIP_SIGNAL_TARGET_IP,
+                   (unsigned)SOMEIP_SIGNAL_TARGET_PORT,
+                   (unsigned)payload[0],
+                   (unsigned)payload[1],
+                   (unsigned)payload[2],
+                   (unsigned)payload[3],
+                   (unsigned)payload[4],
+                   (unsigned)session_id_);
             session_id_++;
+        } else {
+            printf("[SOMEIP][TX] send failed\r\n");
         }
+    }
+
+    VOID poll_receive() {
+        if (!initialized_ || !transport_) {
+            return;
+        }
+
+        while (true) {
+            someip::MessagePtr msg = transport_->receive_message();
+            if (!msg) {
+                break;
+            }
+
+            if ((msg->get_message_type() != someip::MessageType::NOTIFICATION) ||
+                (msg->get_service_id() != (uint16_t)SOMEIP_SIGNAL_SERVICE_ID) ||
+                (msg->get_method_id() != (uint16_t)SOMEIP_SIGNAL_EVENT_ID)) {
+                continue;
+            }
+
+            const std::vector<uint8_t>& payload = msg->get_payload();
+            if (payload.size() < 5U) {
+                continue;
+            }
+
+            remote_left_on_ = (payload[0] != 0U) ? 1U : 0U;
+            remote_right_on_ = (payload[1] != 0U) ? 1U : 0U;
+            remote_brake_on_ = (payload[2] != 0U) ? 1U : 0U;
+            remote_button_a_pressed_ = (payload[3] != 0U) ? 1U : 0U;
+            remote_button_b_pressed_ = (payload[4] != 0U) ? 1U : 0U;
+            remote_has_data_ = true;
+            printf("[SOMEIP][RX] L=%u R=%u B=%u A=%u B=%u\r\n",
+                   (unsigned)remote_left_on_,
+                   (unsigned)remote_right_on_,
+                   (unsigned)remote_brake_on_,
+                   (unsigned)remote_button_a_pressed_,
+                   (unsigned)remote_button_b_pressed_);
+        }
+    }
+
+    UINT get_remote_state(UINT* has_data,
+                          UINT* left_on,
+                          UINT* right_on,
+                          UINT* brake_on,
+                          UINT* button_a_pressed,
+                          UINT* button_b_pressed) const {
+        if (has_data != NX_NULL) {
+            *has_data = remote_has_data_ ? 1U : 0U;
+        }
+        if (left_on != NX_NULL) {
+            *left_on = remote_left_on_;
+        }
+        if (right_on != NX_NULL) {
+            *right_on = remote_right_on_;
+        }
+        if (brake_on != NX_NULL) {
+            *brake_on = remote_brake_on_;
+        }
+        if (button_a_pressed != NX_NULL) {
+            *button_a_pressed = remote_button_a_pressed_;
+        }
+        if (button_b_pressed != NX_NULL) {
+            *button_b_pressed = remote_button_b_pressed_;
+        }
+
+        return NX_SUCCESS;
     }
 
 private:
@@ -150,6 +226,12 @@ private:
     bool has_last_payload_{false};
     uint16_t session_id_{1};
     std::array<uint8_t, 5> last_payload_{};
+    bool remote_has_data_{false};
+    UINT remote_left_on_{0U};
+    UINT remote_right_on_{0U};
+    UINT remote_brake_on_{0U};
+    UINT remote_button_a_pressed_{0U};
+    UINT remote_button_b_pressed_{0U};
     someip::transport::Endpoint target_endpoint_;
     std::shared_ptr<someip::transport::UdpTransport> transport_;
 };
@@ -179,4 +261,20 @@ extern "C" VOID someip_vehicle_signals_publish(UINT left_on,
                                                UINT button_b_pressed)
 {
     g_someip_publisher.publish(left_on, right_on, brake_on, button_a_pressed, button_b_pressed);
+}
+
+extern "C" VOID someip_vehicle_signals_poll_receive(void)
+{
+    g_someip_publisher.poll_receive();
+}
+
+extern "C" UINT someip_vehicle_signals_get_remote_state(UINT* has_data,
+                                                        UINT* left_on,
+                                                        UINT* right_on,
+                                                        UINT* brake_on,
+                                                        UINT* button_a_pressed,
+                                                        UINT* button_b_pressed)
+{
+    return g_someip_publisher.get_remote_state(
+        has_data, left_on, right_on, brake_on, button_a_pressed, button_b_pressed);
 }

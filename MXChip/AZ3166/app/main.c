@@ -322,6 +322,12 @@ static void eclipsetx_thread_entry(ULONG parameter)
     UINT brake_status;
     UINT button_a_pressed;
     UINT button_b_pressed;
+    UINT someip_remote_has_data;
+    UINT someip_remote_left;
+    UINT someip_remote_right;
+    UINT someip_remote_brake;
+    UINT someip_remote_button_a;
+    UINT someip_remote_button_b;
 
     printf("Starting Eclipse ThreadX thread\r\n\r\n");
     NX_PARAMETER_NOT_USED(parameter);
@@ -442,6 +448,7 @@ static void eclipsetx_thread_entry(ULONG parameter)
     lsm6dsl_data_t lsm6dsl_data;
     CHAR screen_value_str[96];
     CHAR signal_state_str[21];
+    CHAR someip_remote_state_str[22];
     CHAR* left_section;
     CHAR* right_section;
     CHAR* brake_section;
@@ -586,6 +593,33 @@ static void eclipsetx_thread_entry(ULONG parameter)
 
         button_a_pressed = BUTTON_A_IS_PRESSED ? 1U : 0U;
         button_b_pressed = BUTTON_B_IS_PRESSED ? 1U : 0U;
+
+        someip_vehicle_signals_poll_receive();
+        someip_vehicle_signals_get_remote_state(&someip_remote_has_data,
+                                                &someip_remote_left,
+                                                &someip_remote_right,
+                                                &someip_remote_brake,
+                                                &someip_remote_button_a,
+                                                &someip_remote_button_b);
+        if (someip_remote_has_data != 0U)
+        {
+            snprintf(someip_remote_state_str, sizeof(someip_remote_state_str),
+                     "SIP L%uR%uB%u A%uB%u   ",
+                     someip_remote_left,
+                     someip_remote_right,
+                     someip_remote_brake,
+                     someip_remote_button_a,
+                     someip_remote_button_b);
+        }
+        else
+        {
+            snprintf(someip_remote_state_str, sizeof(someip_remote_state_str),
+                     "SIP waiting...       ");
+        }
+        ssd1306_SetCursor(0, 54);
+        ssd1306_WriteString(someip_remote_state_str, Font_6x8, White);
+        ssd1306_UpdateScreen();
+
         someip_vehicle_signals_publish(left_signal_on,
                                        right_signal_on,
                                        brake_active,
