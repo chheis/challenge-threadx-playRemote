@@ -22,7 +22,9 @@
 
 #include "wiced_sdk.h"
 
+#if ENABLE_SNTP_TIME_SYNC
 #include "sntp_client.h"
+#endif
 
 #define NETX_IP_STACK_SIZE   2048
 #define NETX_TX_PACKET_COUNT 16
@@ -321,6 +323,7 @@ UINT wwd_network_init(CHAR* ssid, CHAR* password, WiFi_Mode mode)
     }
 #endif
 
+#if ENABLE_SNTP_TIME_SYNC
     // Initialize the SNTP client
     else if ((status = sntp_init()))
     {
@@ -329,12 +332,16 @@ UINT wwd_network_init(CHAR* ssid, CHAR* password, WiFi_Mode mode)
         nx_dhcp_delete(&nx_dhcp_client);
         nx_ip_delete(&nx_ip);
         nx_packet_pool_delete(&nx_pool[0]);
-        nx_packet_pool_delete(&nx_pool[1]);        
+        nx_packet_pool_delete(&nx_pool[1]);
     }
+#endif
 
     // Initialize TLS
     else
     {
+#if !ENABLE_SNTP_TIME_SYNC
+        printf("INFO: SNTP disabled by configuration\r\n");
+#endif
         nx_secure_tls_initialize();
     }
 
@@ -391,11 +398,13 @@ UINT wwd_network_connect()
         printf("ERROR: dns_connect\r\n");
     }
 
+#if ENABLE_SNTP_TIME_SYNC
     // Wait for an SNTP sync
     else if ((status = sntp_sync()))
     {
         printf("ERROR: Failed to sync SNTP time (0x%08x)\r\n", status);
     }
+#endif
 
     return status;
 }

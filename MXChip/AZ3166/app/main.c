@@ -24,7 +24,7 @@
 #include "board_init.h"
 #include "cmsis_utils.h"
 #include "screen.h"
-#include "sntp_client.h"
+//#include "sntp_client.h"
 #include "wwd_networking.h"
 
 #include "cloud_config.h"

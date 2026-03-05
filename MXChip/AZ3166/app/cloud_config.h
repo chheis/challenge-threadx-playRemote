@@ -36,5 +36,11 @@ typedef enum
 // MQTT Config
 // ----------------------------------------------------------------------------
 
+// ----------------------------------------------------------------------------
+// Time sync config
+// ----------------------------------------------------------------------------
+// Set to 1 to require SNTP time sync at startup, or 0 to run without NTP.
+#define ENABLE_SNTP_TIME_SYNC 0
+
 
 #endif // _CLOUD_CONFIG_H
