@@ -70,6 +70,8 @@ static NXD_MQTT_CLIENT              mqtt_client;
 #define MQTT_THREAD_PRIORITY 2
 /* Define the MQTT keep alive timer for 5 minutes */
 #define MQTT_KEEP_ALIVE_TIMER       300
+#define MQTT_CLEAN_SESSION          1
+#define MQTT_STOP_HOLD_TICKS        (2 * TX_TIMER_TICKS_PER_SECOND)
 #define QOS0                        0
 #define QOS1                        1
 #define MQTT_TOPIC_BUFFER_SIZE      64
@@ -328,6 +330,8 @@ static void eclipsetx_thread_entry(ULONG parameter)
     UINT someip_remote_brake;
     UINT someip_remote_button_a;
     UINT someip_remote_button_b;
+    UINT keep_running;
+    ULONG stop_hold_start_ticks;
 
     printf("Starting Eclipse ThreadX thread\r\n\r\n");
     NX_PARAMETER_NOT_USED(parameter);
@@ -386,6 +390,8 @@ static void eclipsetx_thread_entry(ULONG parameter)
 
     /* Start the connection to the server. */
     status = nxd_mqtt_client_connect(&mqtt_client, &server_ip, NXD_MQTT_PORT, MQTT_KEEP_ALIVE_TIMER, 0, NX_WAIT_FOREVER);
+    status = nxd_mqtt_client_connect(&mqtt_client, &server_ip, NXD_MQTT_PORT,
+                                     MQTT_KEEP_ALIVE_TIMER, MQTT_CLEAN_SESSION, NX_WAIT_FOREVER);
 
     if (status != TX_SUCCESS) {
         printf("nxd_mqtt_client_connect (0x%08x)\r\n", status);
@@ -475,11 +481,14 @@ static void eclipsetx_thread_entry(ULONG parameter)
     }
 
     printf("Go for Loop forever\r\n");
-    while (1)
+    keep_running = 1U;
+    stop_hold_start_ticks = 0U;
+    while (keep_running != 0U)
     {
         INT gyro_x;
         INT gyro_y;
         INT gyro_z;
+        ULONG now_ticks;
 
         lsm6dsl_data = lsm6dsl_data_read();
         gyro_x = (INT)lsm6dsl_data.angular_rate_mdps[0];
@@ -626,19 +635,42 @@ static void eclipsetx_thread_entry(ULONG parameter)
                                        button_a_pressed,
                                        button_b_pressed);
 
+        /* Hold both buttons for 2s to gracefully unsubscribe/disconnect. */
+        now_ticks = tx_time_get();
+        if ((button_a_pressed != 0U) && (button_b_pressed != 0U))
+        {
+            if (stop_hold_start_ticks == 0U)
+            {
+                stop_hold_start_ticks = now_ticks;
+            }
+            else if ((ULONG)(now_ticks - stop_hold_start_ticks) >= MQTT_STOP_HOLD_TICKS)
+            {
+                printf("[MQTT][CTRL] stop requested, starting cleanup\r\n");
+                keep_running = 0U;
+                continue;
+            }
+        }
+        else
+        {
+            stop_hold_start_ticks = 0U;
+        }
+
         /* Keep indicator outputs blinking even when no new MQTT message arrives. */
         apply_led_state(left_signal_on, right_signal_on, brake_active);
         tx_thread_sleep(20);
     }
 
     /* Now unsubscribe the topic. */
-    nxd_mqtt_client_unsubscribe(&mqtt_client, SUBSCRIBE_TOPIC, STRLEN(SUBSCRIBE_TOPIC));
+    status = nxd_mqtt_client_unsubscribe(&mqtt_client, SUBSCRIBE_TOPIC, STRLEN(SUBSCRIBE_TOPIC));
+    printf("[MQTT][CLEANUP] unsubscribe status=0x%08x\r\n", status);
 
     /* Disconnect from the broker. */
-    nxd_mqtt_client_disconnect(&mqtt_client);
+    status = nxd_mqtt_client_disconnect(&mqtt_client);
+    printf("[MQTT][CLEANUP] disconnect status=0x%08x\r\n", status);
 
     /* Delete the client instance, release all the resources. */
-    nxd_mqtt_client_delete(&mqtt_client);
+    status = nxd_mqtt_client_delete(&mqtt_client);
+    printf("[MQTT][CLEANUP] delete status=0x%08x\r\n", status);
     someip_vehicle_signals_deinit();
     tx_thread_sleep(1000);
 
