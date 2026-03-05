@@ -19,6 +19,9 @@
 #include "nx_secure_tls_api.h"
 #include "nxd_dhcp_client.h"
 #include "nxd_dns.h"
+#if defined(ENABLE_OPENSOMEIP)
+#include "nxd_bsd.h"
+#endif
 
 #include "wiced_sdk.h"
 
@@ -46,6 +49,12 @@ static UCHAR netx_ip_stack[NETX_IP_STACK_SIZE];
 static UCHAR netx_tx_pool_stack[NETX_TX_POOL_SIZE];
 static UCHAR netx_rx_pool_stack[NETX_RX_POOL_SIZE];
 static UCHAR netx_arp_cache_area[NETX_ARP_CACHE_SIZE];
+#if defined(ENABLE_OPENSOMEIP)
+#define NETX_BSD_STACK_SIZE      4096
+#define NETX_BSD_THREAD_PRIORITY 3
+static CHAR netx_bsd_stack[NETX_BSD_STACK_SIZE];
+static UINT netx_bsd_initialized;
+#endif
 
 static CHAR* netx_ssid;
 static CHAR* netx_password;
@@ -385,6 +394,24 @@ UINT wwd_network_connect()
 
         printf("SUCCESS: WiFi connected\r\n");
     }
+
+#if defined(ENABLE_OPENSOMEIP)
+    if (netx_bsd_initialized == 0U)
+    {
+        INT bsd_status;
+
+        bsd_status = bsd_initialize(&nx_ip, &nx_pool[0],
+                                    netx_bsd_stack, sizeof(netx_bsd_stack),
+                                    NETX_BSD_THREAD_PRIORITY);
+        if (bsd_status != 0)
+        {
+            printf("ERROR: bsd_initialize (%d)\r\n", bsd_status);
+            return NX_NOT_SUCCESSFUL;
+        }
+
+        netx_bsd_initialized = 1U;
+    }
+#endif
 
     // Fetch IP details
     if ((status = dhcp_connect()))

@@ -17,6 +17,9 @@ set(TX_USER_FILE "${CMAKE_CURRENT_LIST_DIR}/threadx/tx_user.h" CACHE STRING "Ena
 # Define NetXDuo user configuration
 set(NX_USER_FILE "${CMAKE_CURRENT_LIST_DIR}/netxduo/nx_user.h" CACHE STRING "Enable NX user configuration")
 set(NXD_ENABLE_FILE_SERVERS OFF CACHE BOOL "Disable fileX dependency by netxduo")
+if(ENABLE_OPENSOMEIP)
+    set(NXD_ENABLE_BSD ON CACHE BOOL "Enable BSD socket layer for OpenSOME/IP transport" FORCE)
+endif()
 
 # Core libraries
 add_subdirectory(${SHARED_LIB_DIR}/threadx threadx)

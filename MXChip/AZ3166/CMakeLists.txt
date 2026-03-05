@@ -32,6 +32,13 @@ include(utilities)
 # CXX enables IntelliSense only. Sources are still compiled as C.
 project(mxchip_threadx C CXX ASM)
 
+# ---------------------------------------------------------------------------
+# Optional OpenSOME/IP integration (disabled by default).
+# ---------------------------------------------------------------------------
+option(ENABLE_OPENSOMEIP "Enable OpenSOME/IP-based signal publishing" OFF)
+set(OPENSOMEIP_SOURCE_DIR "${GSG_BASE_DIR}/third_party/opensomeip"
+    CACHE PATH "Path to the OpenSOME/IP source tree")
+
 add_subdirectory(${SHARED_SRC_DIR} shared_src)
 add_subdirectory(lib)
 add_subdirectory(app)

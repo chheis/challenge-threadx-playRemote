@@ -1,0 +1,6 @@
+#ifndef OPENSOMEIP_NETX_LWIP_NETDB_H
+#define OPENSOMEIP_NETX_LWIP_NETDB_H
+
+#include "lwip/sockets.h"
+
+#endif // OPENSOMEIP_NETX_LWIP_NETDB_H

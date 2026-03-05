@@ -26,6 +26,7 @@
 #include "screen.h"
 //#include "sntp_client.h"
 #include "wwd_networking.h"
+#include "someip_vehicle_signals.h"
 
 #include "cloud_config.h"
 //#include "nx_client.h"
@@ -314,10 +315,13 @@ static VOID apply_led_state(UINT left, UINT right, UINT brake)
 static void eclipsetx_thread_entry(ULONG parameter)
 {
     UINT status;
+    UINT someip_status;
     UINT receive_status;
     UINT left_status;
     UINT right_status;
     UINT brake_status;
+    UINT button_a_pressed;
+    UINT button_b_pressed;
 
     printf("Starting Eclipse ThreadX thread\r\n\r\n");
     NX_PARAMETER_NOT_USED(parameter);
@@ -330,6 +334,9 @@ static void eclipsetx_thread_entry(ULONG parameter)
     
     status = wwd_network_connect();
     printf("network connect status (0x%08x)\r\n", status);
+
+    someip_status = someip_vehicle_signals_init();
+    printf("[SOMEIP][INIT] status=0x%08x\r\n", someip_status);
 
     NX_IP *test = &nx_ip;
     if (test == NULL) {
@@ -577,6 +584,14 @@ static void eclipsetx_thread_entry(ULONG parameter)
             printf("[MQTT][RX] tx_event_flags_get status=0x%08x\r\n", status);
         }
 
+        button_a_pressed = BUTTON_A_IS_PRESSED ? 1U : 0U;
+        button_b_pressed = BUTTON_B_IS_PRESSED ? 1U : 0U;
+        someip_vehicle_signals_publish(left_signal_on,
+                                       right_signal_on,
+                                       brake_active,
+                                       button_a_pressed,
+                                       button_b_pressed);
+
         /* Keep indicator outputs blinking even when no new MQTT message arrives. */
         apply_led_state(left_signal_on, right_signal_on, brake_active);
         tx_thread_sleep(20);
@@ -590,6 +605,7 @@ static void eclipsetx_thread_entry(ULONG parameter)
 
     /* Delete the client instance, release all the resources. */
     nxd_mqtt_client_delete(&mqtt_client);
+    someip_vehicle_signals_deinit();
     tx_thread_sleep(1000);
 
     ssd1306_SetCursor(20, 30);
