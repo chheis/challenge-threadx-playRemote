@@ -27,7 +27,7 @@ typedef enum
 // ----------------------------------------------------------------------------
 // WiFi connection config
 // ----------------------------------------------------------------------------
-#define HOSTNAME      "chheis-eclipse-threadx-someip-reciever"  //Change to unique hostname.
+
 #define WIFI_SSID     "sdvdemo"          //Change to your WiFi SSID.
 #define WIFI_PASSWORD "Demo1234"          //Change to your WiFi password.
 #define WIFI_MODE     WPA2_PSK_AES
@@ -48,11 +48,13 @@ typedef enum
 #endif
 
 #if (SOMEIP_DEVICE_ROLE == 1)
+#define HOSTNAME      "chheis-eclipse-threadx-someip-sender-IP91"  //Change to unique hostname.
 #define SOMEIP_SIGNAL_TARGET_IP "192.168.88.92"
 #define SOMEIP_SIGNAL_TARGET_PORT 30500
 #define SOMEIP_SIGNAL_LOCAL_IP "0.0.0.0"
 #define SOMEIP_SIGNAL_LOCAL_PORT 30490
 #elif (SOMEIP_DEVICE_ROLE == 2)
+#define HOSTNAME      "chheis-eclipse-threadx-someip-reciever-IP92"  //Change to unique hostname.
 #define SOMEIP_SIGNAL_TARGET_IP "192.168.88.91"
 #define SOMEIP_SIGNAL_TARGET_PORT 30490
 #define SOMEIP_SIGNAL_LOCAL_IP "0.0.0.0"
